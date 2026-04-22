@@ -33,6 +33,17 @@ GROUP_FILL_COLORS = [
     "A9C4E8",
     "F8CBAD",
 ]
+SUBGROUP_FILL_COLORS = [
+    "00B0F0",
+    "92D050",
+    "FFC000",
+    "FF99CC",
+    "B4A7D6",
+    "66CDAA",
+]
+SUBGROUP_KEY_COLUMN = "成套模具号"
+SUBGROUP_COLUMNS = ["成套模具号", "是否无用物料", "是否冻结物料", "不维护过程组件"]
+BORDER_COLOR = "305496"
 
 
 def configure_console_encoding() -> None:
@@ -129,6 +140,82 @@ def apply_group_row_colors(workbook, ws, df: pd.DataFrame) -> None:
     colored_rows = int(color_ids.gt(0).sum())
     colored_groups = df.loc[color_ids.gt(0), "初始模具号"].nunique()
     log(f"着色完成: 共覆盖 {colored_groups} 个多版本分组，{colored_rows} 行。")
+
+
+def apply_child_subgroup_borders(workbook, ws, df: pd.DataFrame) -> None:
+    missing_cols = [col for col in SUBGROUP_COLUMNS if col not in df.columns]
+    if missing_cols:
+        raise KeyError(f"缺少子组边框必要列: {missing_cols}")
+
+    target_col_indexes = [df.columns.get_loc(col) for col in SUBGROUP_COLUMNS]
+    group_formats: dict[tuple[int, bool, bool, bool, bool], object] = {}
+    colored_mask = pd.to_numeric(df["分组色号"], errors="coerce").fillna(0).astype(int).gt(0)
+    initial_values = [clean_text(value) for value in df["初始模具号"].tolist()]
+    child_values = [clean_text(value) for value in df[SUBGROUP_KEY_COLUMN].tolist()]
+
+    colored_subgroups = 0
+    colored_rows = 0
+
+    def get_format(color_id: int, top: bool, bottom: bool, left: bool, right: bool):
+        key = (color_id, top, bottom, left, right)
+        if key not in group_formats:
+            fmt_props = {"bg_color": f"#{GROUP_FILL_COLORS[color_id - 1]}"}
+            if top:
+                fmt_props["top"] = 2
+                fmt_props["top_color"] = f"#{BORDER_COLOR}"
+            if bottom:
+                fmt_props["bottom"] = 2
+                fmt_props["bottom_color"] = f"#{BORDER_COLOR}"
+            if left:
+                fmt_props["left"] = 2
+                fmt_props["left_color"] = f"#{BORDER_COLOR}"
+            if right:
+                fmt_props["right"] = 2
+                fmt_props["right_color"] = f"#{BORDER_COLOR}"
+            group_formats[key] = workbook.add_format(fmt_props)
+        return group_formats[key]
+
+    main_start = 0
+    while main_start < len(df):
+        initial_mold_no = initial_values[main_start]
+        main_end = main_start
+        while main_end + 1 < len(df) and initial_values[main_end + 1] == initial_mold_no:
+            main_end += 1
+
+        if not initial_mold_no or not bool(colored_mask.iloc[main_start]):
+            main_start = main_end + 1
+            continue
+
+        child_start = main_start
+        while child_start <= main_end:
+            child_no = child_values[child_start]
+            child_end = child_start
+            while child_end + 1 <= main_end and child_values[child_end + 1] == child_no:
+                child_end += 1
+
+            color_id = int(pd.to_numeric(df.at[df.index[child_start], "分组色号"], errors="coerce"))
+            for row_idx in range(child_start, child_end + 1):
+                for position, col_idx in enumerate(target_col_indexes):
+                    value = df.iat[row_idx, col_idx]
+                    fmt = get_format(
+                        color_id=color_id,
+                        top=row_idx == child_start,
+                        bottom=row_idx == child_end,
+                        left=position == 0,
+                        right=position == len(target_col_indexes) - 1,
+                    )
+                    if pd.isna(value):
+                        ws.write_blank(row_idx + 1, col_idx, None, fmt)
+                    else:
+                        ws.write(row_idx + 1, col_idx, value, fmt)
+
+            colored_subgroups += 1
+            colored_rows += child_end - child_start + 1
+            child_start = child_end + 1
+
+        main_start = main_end + 1
+
+    log(f"子组边框完成: 共覆盖 {colored_subgroups} 个子组，{colored_rows} 行。")
 
 
 def assign_group_color_ids(df: pd.DataFrame) -> None:
@@ -271,6 +358,8 @@ def main() -> None:
         df1.to_excel(writer, sheet_name=sheet_name, index=False)
         log("步骤6/6: 仅对版本数量>=2的分组着色。")
         apply_group_row_colors(writer.book, writer.sheets[sheet_name], df1)
+        log("额外步骤: 对已染色分组内的成套模具号子组进行四列边框标识。")
+        apply_child_subgroup_borders(writer.book, writer.sheets[sheet_name], df1)
 
     log("处理完成。")
 
