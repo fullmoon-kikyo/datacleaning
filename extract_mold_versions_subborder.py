@@ -145,9 +145,14 @@ def apply_group_row_colors(workbook, ws, df: pd.DataFrame) -> None:
 def apply_child_subgroup_borders(workbook, ws, df: pd.DataFrame) -> None:
     missing_cols = [col for col in SUBGROUP_COLUMNS if col not in df.columns]
     if missing_cols:
-        raise KeyError(f"缺少子组边框必要列: {missing_cols}")
+        log(f"提示: 缺少子组边框列 {missing_cols}，将自动跳过这些列。")
 
-    target_col_indexes = [df.columns.get_loc(col) for col in SUBGROUP_COLUMNS]
+    target_columns = [col for col in SUBGROUP_COLUMNS if col in df.columns]
+    if not target_columns:
+        log("提示: 没有可用于子组边框的列，跳过子组边框步骤。")
+        return
+
+    target_col_indexes = [df.columns.get_loc(col) for col in target_columns]
     group_formats: dict[tuple[int, bool, bool, bool, bool], object] = {}
     colored_mask = pd.to_numeric(df["分组色号"], errors="coerce").fillna(0).astype(int).gt(0)
     initial_values = [clean_text(value) for value in df["初始模具号"].tolist()]
